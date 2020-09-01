@@ -1,8 +1,5 @@
 # Contains P2P calls with improved efficiency, i.e., the pointer approach
 
-import time
-start = time.time()
-
 import sys
 from creader_wrapper import RecorderReader
 
@@ -11,8 +8,6 @@ func_list = reader.funcs
 
 nodes = []
 edges = []
-
-#ptr = 0 
 
 ############################
 #         MAIN             #
@@ -152,40 +147,7 @@ for n in range(reader.GM.total_ranks):
     if z == a:
         print 'Sends from Rank', n, 'Successful'
 
-end = time.time()
-
-rt = end-start
-print rt
 #getinfo()
-
-
-'''
-print 'Isends = ', a          
-print 'No. of matched calls:', sum(total)
-
-'''
-'''
-0 - 5863
-1 - 7806
-2 - 7994
-3 - 5776
-4 - 7368
-5 - 8897
-6 - 9167
-7 - 7423
-8 - 7731
-9 - 9014
-10 - 8897
-11 - 7208
-12 - 5358
-13 - 6973
-14 - 6973
-15 - 5358
-16 - 6973
-
-
-'''
-
 
 
 
