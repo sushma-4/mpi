@@ -1,5 +1,3 @@
-# Contains P2P calls with improved efficiency, i.e., the pointer approach
-
 import sys
 from creader_wrapper import RecorderReader
 
@@ -26,6 +24,8 @@ for rank in range(reader.GM.total_ranks):
     
     for i in range(reader.LMs[rank].total_records):
         call = func_list[record[i].func_id]  
+
+        ## Point-to-Point calls
 
         if call == 'MPI_Send' and record[i].args[5] == 'MPI_COMM_WORLD':
             index = index + 1
@@ -69,16 +69,44 @@ for rank in range(reader.GM.total_ranks):
             args = args.split(',')
             temp.append(node(rank,index,call,args))
 
+        ## Collective calls
+
+        if call == 'MPI_Bcast' and record[i].args[4] == 'MPI_COMM_WORLD':
+            index = index + 1
+            args = int(record[i].args[3])
+            temp.append(node(rank,index,call,args))
+        
+        if call == 'MPI_Reduce' and record[i].args[6] == 'MPI_COMM_WORLD':
+            index = index + 1
+            args = int(record[i].args[5])
+            temp.append(node(rank,index,call,args))
+        
+        if call == 'MPI_Gather' and record[i].args[7] == 'MPI_COMM_WORLD':
+            index = index + 1
+            args = int(record[i].args[6])
+            temp.append(node(rank,index,call,args)) 
+
+        if call == 'MPI_Gatherv' and record[i].args[8] == 'MPI_COMM_WORLD':
+            index = index + 1
+            args = int(record[i].args[7])
+            temp.append(node(rank,index,call,args))         
+        
+        if call == 'MPI_Barrier' and  record[i].args[0] == 'MPI_COMM_WORLD':
+            index = index + 1
+            args = 0
+            temp.append(node(rank,index,call,args))
+
+        if call == 'MPI_Allreduce' and record[i].args[5] == 'MPI_COMM_WORLD':
+            index = index + 1
+            args = 0
+            temp.append(node(rank,index,call,args)) 
+                    
+        if call == 'MPI_Allgatherv' and record[i].args[7] == 'MPI_COMM_WORLD':
+            index = index + 1
+            args = 0
+            temp.append(node(rank,index,call,args))         
+        
     nodes.append(temp)
-
-
-
-ptr = []
-for x in range(reader.GM.total_ranks):
-    ptemp = []
-    for y in range(reader.GM.total_ranks):
-        ptemp.append(0)
-    ptr.append(ptemp)
 
 
 def getinfo():
@@ -88,6 +116,82 @@ def getinfo():
             print n.call
             print n.args
             print ('\n')
+
+ptr = []
+for x in range(reader.GM.total_ranks):
+    ptemp = []
+    for y in range(reader.GM.total_ranks):
+        ptemp.append(0)
+    ptr.append(ptemp)
+
+
+def match_collectives(thisnode):
+    x = (thisnode.rank, thisnode.index)
+    h = t = []
+    h.append(x)
+
+    global ptr
+    name = thisnode.call
+    r = range(reader.GM.total_ranks)
+    r.remove(0)
+    for dest in r:
+        for j in range(ptr[0][dest],len(nodes[dest])):
+            if nodes[dest][j].call == name:
+                x = (nodes[dest][j].rank, nodes[dest][j].index)
+                h.append(x)
+                ptr[0][dest] = j + 1
+                break
+
+    e = (h,t)
+    edges.append(e)
+    
+    if len(t) == len(r)+1:
+        return True    
+
+
+def match_redgat(thisnode):
+    global ptr
+    t = (thisnode.rank, thisnode.index)
+    h = []
+    name = thisnode.call
+    root = thisnode.rank
+    r = range(reader.GM.total_ranks)
+    r.remove(root)
+    for dest in r:
+        for j in range(ptr[root][dest],len(nodes[dest])):
+            if nodes[dest][j].call == name and nodes[dest][j].args == root:
+                x = (nodes[dest][j].rank, nodes[dest][j].index)
+                h.append(x)
+                ptr[root][dest] = j + 1
+                break
+
+    e = (h,t)
+    edges.append(e)
+    
+    if len(h) == len(r):
+        return True
+    
+
+def match_bcast(thisnode):
+    global ptr
+    h = (thisnode.rank, thisnode.index)
+    t = []
+    root = thisnode.rank
+    r = range(reader.GM.total_ranks)
+    r.remove(root)
+    for dest in r:
+        for j in range(ptr[root][dest],len(nodes[dest])):
+            if nodes[dest][j].call == 'MPI_Bcast' and nodes[dest][j].args == root:
+                x = (nodes[dest][j].rank, nodes[dest][j].index)
+                t.append(x)
+                ptr[root][dest] = j + 1
+                break
+
+    e = (h,t)
+    edges.append(e)
+    
+    if len(t) == len(r):
+        return True
 
 
 def find_recv(thisnode):
@@ -129,28 +233,42 @@ def find_recv(thisnode):
                     e = (h,t)
                     edges.append(e)
                     nodes[dest][w].args.remove(req)
-                    return True 
+                    return True   
 
 
+##########################################################################################################
 for n in range(reader.GM.total_ranks):
     a = 0
     z = 0
     for thisnode in nodes[n]:
-        if thisnode.call == 'MPI_Isend' or thisnode.call == 'MPI_Ssend' or thisnode.call == 'MPI_Send' or thisnode.call == 'MPI_Sendrecv':
+        
+        if thisnode.call in ['MPI_Send','MPI_Ssend','MPI_Isend','MPI_Sendrecv']:
             a = a + 1
             if(find_recv(thisnode)):
                 z = z + 1
-            else:
-                print thisnode.rank, thisnode.index
-                break          
-   
+        
+        if thisnode.call == 'MPI_Bcast': 
+            root = thisnode.args
+            if root == n:
+                a = a + 1
+                if(match_bcast(thisnode)):
+                    z = z + 1
+        
+        if thisnode.call in ['MPI_Reduce','MPI_Gather','MPI_Gatherv']: 
+            root = thisnode.args
+            if root == n:
+                a = a + 1
+                if(match_redgat(thisnode)):
+                    z = z + 1
+    
+        if thisnode.call in ['MPI_Barrier', 'MPI_Allreduce', 'MPI_Allgatherv']:
+            if n == 0:
+                a = a + 1
+                if(match_collectives(thisnode)):
+                    z = z + 1
+    
     if z == a:
-        print 'Sends from Rank', n, 'Successful'
+        print 'Calls from Rank', n, 'Successful'
 
-#getinfo()
-
-
-
-
-
-
+    else:
+        print 'Something went wrong'
