@@ -7,6 +7,7 @@ func_list = reader.funcs
 nodes = []
 edges = []
 
+
 ############################
 #         MAIN             #
 ############################
@@ -29,32 +30,32 @@ for rank in range(reader.GM.total_ranks):
 
         if call == 'MPI_Send' and record[i].args[5] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = int(record[i].args[3])
+            args = [int(record[i].args[3]), int(record[i].args[4]), record[i].args[5]]
             temp.append(node(rank,index,call,args))
                     
         if call == 'MPI_Recv' and record[i].args[5] == 'MPI_COMM_WORLD':
             index = index + 1        
-            args = int(record[i].args[3])
+            args = [int(record[i].args[3]), int(record[i].args[4]), record[i].args[5]]
             temp.append(node(rank,index,call,args))
         
         if call == 'MPI_Ssend' and record[i].args[5] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = int(record[i].args[3])
+            args = [int(record[i].args[3]), int(record[i].args[4]), record[i].args[5]]
             temp.append(node(rank,index,call,args))
 
         if call == 'MPI_Sendrecv' and record[i].args[10] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = [int(record[i].args[3]),int(record[i].args[8])]
+            args = [int(record[i].args[3]), int(record[i].args[4]), int(record[i].args[8]), int(record[i].args[9]), record[i].args[10]]
             temp.append(node(rank,index,call,args))
         
         if call == 'MPI_Isend' and record[i].args[5] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = int(record[i].args[3])
+            args = [int(record[i].args[3]), int(record[i].args[4]), record[i].args[5]]
             temp.append(node(rank,index,call,args))
   
         if call == 'MPI_Irecv' and record[i].args[5] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = [int(record[i].args[3]),record[i].args[6]]
+            args = [int(record[i].args[3]), int(record[i].args[4]), record[i].args[6], record[i].args[5]]
             temp.append(node(rank,index,call,args))
 
         if call == 'MPI_Wait':
@@ -73,37 +74,37 @@ for rank in range(reader.GM.total_ranks):
 
         if call == 'MPI_Bcast' and record[i].args[4] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = int(record[i].args[3])
+            args = [int(record[i].args[3]), record[i].args[4]]
             temp.append(node(rank,index,call,args))
         
         if call == 'MPI_Reduce' and record[i].args[6] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = int(record[i].args[5])
+            args =  [int(record[i].args[5]), record[i].args[6]]
             temp.append(node(rank,index,call,args))
         
         if call == 'MPI_Gather' and record[i].args[7] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = int(record[i].args[6])
+            args =  [int(record[i].args[6]), record[i].args[7]]
             temp.append(node(rank,index,call,args)) 
 
         if call == 'MPI_Gatherv' and record[i].args[8] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = int(record[i].args[7])
+            args =  [int(record[i].args[7]), record[i].args[8]]
             temp.append(node(rank,index,call,args))         
         
         if call == 'MPI_Barrier' and  record[i].args[0] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = 0
+            args = [record[i].args[0]]
             temp.append(node(rank,index,call,args))
 
         if call == 'MPI_Allreduce' and record[i].args[5] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = 0
+            args = [record[i].args[5]]
             temp.append(node(rank,index,call,args)) 
                     
         if call == 'MPI_Allgatherv' and record[i].args[7] == 'MPI_COMM_WORLD':
             index = index + 1
-            args = 0
+            args = [record[i].args[7]]
             temp.append(node(rank,index,call,args))         
         
     nodes.append(temp)
@@ -116,6 +117,10 @@ def getinfo():
             print n.call
             print n.args
             print ('\n')
+
+
+#####################  DEFINING FUNCTIONS TO MATCH CALLS #########################
+
 
 ptr = []
 for x in range(reader.GM.total_ranks):
@@ -159,7 +164,7 @@ def match_redgat(thisnode):
     r.remove(root)
     for dest in r:
         for j in range(ptr[root][dest],len(nodes[dest])):
-            if nodes[dest][j].call == name and nodes[dest][j].args == root:
+            if nodes[dest][j].call == name and nodes[dest][j].args[0] == root:
                 x = (nodes[dest][j].rank, nodes[dest][j].index)
                 h.append(x)
                 ptr[root][dest] = j + 1
@@ -181,7 +186,7 @@ def match_bcast(thisnode):
     r.remove(root)
     for dest in r:
         for j in range(ptr[root][dest],len(nodes[dest])):
-            if nodes[dest][j].call == 'MPI_Bcast' and nodes[dest][j].args == root:
+            if nodes[dest][j].call == 'MPI_Bcast' and nodes[dest][j].args[0] == root:
                 x = (nodes[dest][j].rank, nodes[dest][j].index)
                 t.append(x)
                 ptr[root][dest] = j + 1
@@ -200,43 +205,52 @@ def find_recv(thisnode):
     frm = thisnode.rank
     if thisnode.call == 'MPI_Sendrecv':
         dest = thisnode.args[0]
+        stag = thisnode.args[1]
     else:
-        dest = thisnode.args
+        dest = thisnode.args[0]
+        stag = thisnode.args[1]
+
     for j in range(ptr[frm][dest],len(nodes[dest])):
-        if nodes[dest][j].call == 'MPI_Recv' and nodes[dest][j].args == frm:
-            t = (nodes[dest][j].rank, nodes[dest][j].index)        
-            e = (h,t)
-            edges.append(e)
-            ptr[frm][dest] = j + 1
-            return True
+        if nodes[dest][j].call == 'MPI_Recv' and nodes[dest][j].args[0] == frm:
+            ptr[frm][dest] = j 
+            if nodes[dest][j].args[1] == stag:
+                t = (nodes[dest][j].rank, nodes[dest][j].index)        
+                e = (h,t)
+                edges.append(e)
+                nodes[dest][j].call = None
+                return True
         
-        if nodes[dest][j].call == 'MPI_Sendrecv' and nodes[dest][j].args[1] == frm:
-            t = (nodes[dest][j].rank, nodes[dest][j].index)        
-            e = (h,t)
-            edges.append(e)
-            ptr[frm][dest] = j + 1
-            return True
-        
-        if nodes[dest][j].call == 'MPI_Irecv' and nodes[dest][j].args[0] == frm:
-            #print nodes[dest][j].rank, nodes[dest][j].index
-            ptr[frm][dest] = j + 1
-            req = nodes[dest][j].args[1]
-            for w in range(j,len(nodes[dest])):
-                if nodes[dest][w].call == 'MPI_Wait' and nodes[dest][w].args == req:
-                    t = (nodes[dest][w].rank, nodes[dest][w].index) 
-                    e = (h,t)
-                    edges.append(e)
-                    nodes[dest][w].args.remove(req)
-                    return True
-                if nodes[dest][w].call == 'MPI_Waitall' and req in nodes[dest][w].args:
-                    t = (nodes[dest][w].rank, nodes[dest][w].index) 
-                    e = (h,t)
-                    edges.append(e)
-                    nodes[dest][w].args.remove(req)
-                    return True   
+        elif nodes[dest][j].call == 'MPI_Sendrecv' and nodes[dest][j].args[2] == frm:
+            ptr[frm][dest] = j 
+            if nodes[dest][j].args[3] == stag:
+                t = (nodes[dest][j].rank, nodes[dest][j].index)        
+                e = (h,t)
+                edges.append(e)
+                nodes[dest][j].args[2] = None
+                return True
+
+        elif nodes[dest][j].call == 'MPI_Irecv' and nodes[dest][j].args[0] == frm:
+            ptr[frm][dest] = j
+            if nodes[dest][j].args[1] == stag:
+                nodes[dest][j].call = None
+                req = nodes[dest][j].args[2]
+                for w in range(j,len(nodes[dest])):
+                    if nodes[dest][w].call == 'MPI_Wait' and nodes[dest][w].args == req:
+                        t = (nodes[dest][w].rank, nodes[dest][w].index) 
+                        e = (h,t)
+                        edges.append(e)
+                        nodes[dest][w].args.remove(req)
+                        return True
+                    elif nodes[dest][w].call == 'MPI_Waitall' and (req in nodes[dest][w].args):
+                        t = (nodes[dest][w].rank, nodes[dest][w].index) 
+                        e = (h,t)
+                        edges.append(e)
+                        nodes[dest][w].args.remove(req)
+                        return True   
 
 
-##########################################################################################################
+#############################  INTERATE EVERY NODE IN THE LIST AND FIND A MATCH ################################
+
 for n in range(reader.GM.total_ranks):
     a = 0
     z = 0
@@ -246,27 +260,29 @@ for n in range(reader.GM.total_ranks):
             a = a + 1
             if(find_recv(thisnode)):
                 z = z + 1
-        
+             
         if thisnode.call == 'MPI_Bcast': 
-            root = thisnode.args
+            root = thisnode.args[0]
             if root == n:
                 a = a + 1
                 if(match_bcast(thisnode)):
                     z = z + 1
         
         if thisnode.call in ['MPI_Reduce','MPI_Gather','MPI_Gatherv']: 
-            root = thisnode.args
+            root = thisnode.args[0]
             if root == n:
                 a = a + 1
                 if(match_redgat(thisnode)):
                     z = z + 1
-    
+
         if thisnode.call in ['MPI_Barrier', 'MPI_Allreduce', 'MPI_Allgatherv']:
             if n == 0:
                 a = a + 1
                 if(match_collectives(thisnode)):
                     z = z + 1
-    
+        
+
+    print a, z
     if z == a:
         print 'Calls from Rank', n, 'Successful'
 
