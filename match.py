@@ -151,6 +151,7 @@ def match_collectives(thisnode):
     edges.append(e)
     
     if len(t) == len(r)+1:
+        #print e
         return True    
 
 
@@ -174,6 +175,7 @@ def match_redgat(thisnode):
     edges.append(e)
     
     if len(h) == len(r):
+        #print e
         return True
     
 
@@ -196,42 +198,59 @@ def match_bcast(thisnode):
     edges.append(e)
     
     if len(t) == len(r):
+        #print e
         return True
 
 
-def find_recv(thisnode):
+def find_ptr(thisnode):
     global ptr
-    h = (thisnode.rank, thisnode.index)
     frm = thisnode.rank
-    if thisnode.call == 'MPI_Sendrecv':
-        dest = thisnode.args[0]
-        stag = thisnode.args[1]
-    else:
-        dest = thisnode.args[0]
-        stag = thisnode.args[1]
+    dest = thisnode.args[0]
 
     for j in range(ptr[frm][dest],len(nodes[dest])):
-        if nodes[dest][j].call == 'MPI_Recv' and nodes[dest][j].args[0] == frm:
-            ptr[frm][dest] = j 
-            if nodes[dest][j].args[1] == stag:
-                t = (nodes[dest][j].rank, nodes[dest][j].index)        
-                e = (h,t)
-                edges.append(e)
-                nodes[dest][j].call = None
-                return True
-        
-        elif nodes[dest][j].call == 'MPI_Sendrecv' and nodes[dest][j].args[2] == frm:
-            ptr[frm][dest] = j 
-            if nodes[dest][j].args[3] == stag:
-                t = (nodes[dest][j].rank, nodes[dest][j].index)        
-                e = (h,t)
-                edges.append(e)
-                nodes[dest][j].args[2] = None
-                return True
-
-        elif nodes[dest][j].call == 'MPI_Irecv' and nodes[dest][j].args[0] == frm:
+        if nodes[dest][j].call == 'MPI_Recv' and (nodes[dest][j].args[0] == frm or nodes[dest][j].args[0] == -2):
             ptr[frm][dest] = j
-            if nodes[dest][j].args[1] == stag:
+            find_recv(thisnode)
+            return
+
+        elif nodes[dest][j].call == 'MPI_Sendrecv' and (nodes[dest][j].args[2] == frm or nodes[dest][j].args[2] == -2):
+            ptr[frm][dest] = j 
+            find_recv(thisnode)
+            return
+
+        elif nodes[dest][j].call == 'MPI_Irecv' and (nodes[dest][j].args[0] == frm or nodes[dest][j].args[0] == -2):
+            ptr[frm][dest] = j
+            find_recv(thisnode)
+            return
+
+
+def find_recv(thisnode):
+    global ptr, z
+    h = (thisnode.rank, thisnode.index)
+    frm = thisnode.rank
+    dest = thisnode.args[0]
+    stag = thisnode.args[1]
+
+    for j in range(ptr[frm][dest],len(nodes[dest])):
+        if nodes[dest][j].call == 'MPI_Recv' and (nodes[dest][j].args[0] == frm or nodes[dest][j].args[0] == -2) and (nodes[dest][j].args[1] == stag or nodes[dest][j].args[1] == -1):
+            t = (nodes[dest][j].rank, nodes[dest][j].index)        
+            e = (h,t)
+            edges.append(e)
+            nodes[dest][j].call = None
+            z = z + 1
+            #print e
+            return True
+        
+        elif nodes[dest][j].call == 'MPI_Sendrecv' and (nodes[dest][j].args[2] == frm or nodes[dest][j].args[2] == -2) and (nodes[dest][j].args[3] == stag or nodes[dest][j].args[3] == -1):
+            t = (nodes[dest][j].rank, nodes[dest][j].index)        
+            e = (h,t)
+            edges.append(e)
+            nodes[dest][j].args[2] = None
+            z = z + 1
+            #print e
+            return True
+
+        elif nodes[dest][j].call == 'MPI_Irecv' and (nodes[dest][j].args[0] == frm or nodes[dest][j].args[0] == -2) and (nodes[dest][j].args[1] == stag or nodes[dest][j].args[1] == -1):
                 nodes[dest][j].call = None
                 req = nodes[dest][j].args[2]
                 for w in range(j,len(nodes[dest])):
@@ -239,16 +258,20 @@ def find_recv(thisnode):
                         t = (nodes[dest][w].rank, nodes[dest][w].index) 
                         e = (h,t)
                         edges.append(e)
-                        nodes[dest][w].args.remove(req)
+                        nodes[dest][w].call = None
+                        z = z + 1
+                        #print e
                         return True
                     elif nodes[dest][w].call == 'MPI_Waitall' and (req in nodes[dest][w].args):
                         t = (nodes[dest][w].rank, nodes[dest][w].index) 
                         e = (h,t)
                         edges.append(e)
                         nodes[dest][w].args.remove(req)
+                        z = z + 1
+                        #print e
                         return True   
 
-
+z = 0
 #############################  INTERATE EVERY NODE IN THE LIST AND FIND A MATCH ################################
 
 for n in range(reader.GM.total_ranks):
@@ -258,12 +281,12 @@ for n in range(reader.GM.total_ranks):
         
         if thisnode.call in ['MPI_Send','MPI_Ssend','MPI_Isend','MPI_Sendrecv']:
             a = a + 1
-            if(find_recv(thisnode)):
-                z = z + 1
+            find_ptr(thisnode)
              
         if thisnode.call == 'MPI_Bcast': 
             root = thisnode.args[0]
             if root == n:
+                #print thisnode.call
                 a = a + 1
                 if(match_bcast(thisnode)):
                     z = z + 1
@@ -271,20 +294,22 @@ for n in range(reader.GM.total_ranks):
         if thisnode.call in ['MPI_Reduce','MPI_Gather','MPI_Gatherv']: 
             root = thisnode.args[0]
             if root == n:
+                #print thisnode.call
                 a = a + 1
                 if(match_redgat(thisnode)):
                     z = z + 1
 
         if thisnode.call in ['MPI_Barrier', 'MPI_Allreduce', 'MPI_Allgatherv']:
             if n == 0:
+                #print thisnode.call
                 a = a + 1
                 if(match_collectives(thisnode)):
-                    z = z + 1
-        
+                    z = z + 1   
 
     print a, z
-    if z == a:
-        print 'Calls from Rank', n, 'Successful'
+    if z != a:
+        print thisnode.index
+        break
 
     else:
-        print 'Something went wrong'
+        print 'Calls from Rank', n, 'Successful'
