@@ -1,4 +1,4 @@
-## Multi-communicators implemented with Pointer Approach ##
+######### Matching across multicommunicators (without Pointer Approach) ##########
 
 import time
 #start_time = time.time()
@@ -40,7 +40,7 @@ for rank in range(reader.GM.total_ranks):
     
     for i in range(reader.LMs[rank].total_records):
         call = func_list[record[i].func_id]
-
+        
         ## Point-to-Point calls
 
         if call == 'MPI_Send':
@@ -85,25 +85,16 @@ for rank in range(reader.GM.total_ranks):
             args = args.split(',')
             temp.append(node(rank,index,call,args))        
 
-        if call == 'MPI_Comm_split':
-            uid = record[i].args[3]
-            args = [rank,int(record[i].args[2])]
-            splits.append(com_node(uid,args))
-            if uid not in uids:
-                uids.append(uid)   
-        
-        if call == 'MPI_Comm_dup':
-            uid = record[i].args[1]
-            args = [rank,rank]
-            splits.append(com_node(uid,args))
-            if uid not in uids:
-                uids.append(uid)
-
         ## Collective calls
         
         if call == 'MPI_Bcast':
             index = index + 1
             args = [int(record[i].args[3]), record[i].args[4]]
+            temp.append(node(rank,index,call,args))
+
+        if call == 'MPI_Ibcast':
+            index = index + 1
+            args = [int(record[i].args[3]), record[i].args[5], record[i].args[4]]
             temp.append(node(rank,index,call,args))
         
         if call == 'MPI_Reduce':
@@ -134,9 +125,161 @@ for rank in range(reader.GM.total_ranks):
         if call == 'MPI_Allgatherv':
             index = index + 1
             args = [record[i].args[7]]
-            temp.append(node(rank,index,call,args))   
+            temp.append(node(rank,index,call,args))  
+
+        if call == 'MPI_Comm_split':
+            uid = record[i].args[3]
+            args = [rank,int(record[i].args[2])]
+            splits.append(com_node(uid,args))
+            if uid not in uids:
+                uids.append(uid)   
+        
+        if call == 'MPI_Comm_dup':
+            uid = record[i].args[1]
+            args = [rank,rank]
+            splits.append(com_node(uid,args))
+            if uid not in uids:
+                uids.append(uid)
                     
     nodes.append(temp)
+
+
+def getinfo():
+    for i in range(len(nodes)):
+        for n in nodes[i]:
+            print n.rank, n.index
+            print n.call
+            print n.args
+            print ('\n')
+
+
+#####################  DEFINING FUNCTIONS TO MATCH CALLS #########################
+ 
+def match_collectives(thisnode, eachcom):
+    x = (thisnode.rank, thisnode.index)
+    h = t = []
+    h.append(x)
+    name = thisnode.call
+    r = range(len(eachcom))
+    r.remove(0)
+    for dest in r:
+        for n in eachcom[dest]:
+            if n.call == name:
+                x = (n.rank, n.index)
+                h.append(x)
+                n.call = None
+                break
+
+    e = (h,t)
+    edges.append(e)
+    
+    if len(t) == len(r)+1:
+        #print e
+        return True    
+
+def match_redgat(thisnode, eachcom):
+    t = (thisnode.rank, thisnode.index)
+    h = []
+    name = thisnode.call
+    root = thisnode.args[0]
+    r = range(len(eachcom))
+    r.remove(root)
+    for dest in r:
+        for n in eachcom[dest]:
+            if n.call == name and n.args[0] == root:
+                x = (n.rank, n.index)
+                h.append(x)
+                n.call = None
+                break
+
+    e = (h,t)
+    edges.append(e)
+    
+    if len(h) == len(r):
+        #print e
+        return True
+
+def match_bcast(thisnode, eachcom):
+    h = (thisnode.rank, thisnode.index)
+    t = []
+    root = thisnode.args[0]
+    r = range(len(eachcom))
+    r.remove(root)
+    for dest in r:
+        for n in eachcom[dest]:
+            if n.call == 'MPI_Bcast' and n.args[0] == root:
+                x = (n.rank, n.index)
+                t.append(x)
+                n.call = None
+                break
+            elif n.call == 'MPI_Ibcast' and n.args[0] == root:
+                n.call = None
+                req = n.args[1]
+                destg = translate[thisnode.args[-1]][dest]
+                for w in nodes[destg]:
+                    if w.call == 'MPI_Wait' and w.args == req:
+                        x = (w.rank, w.index) 
+                        t.append(x)
+                        w.call = None
+                        #print e
+                        break
+                    elif w.call == 'MPI_Waitall' and (req in w.args):
+                        x = (w.rank,w.index)
+                        t.append(x) 
+                        w.args.remove(req)
+                        #print e
+                        break
+                
+
+    e = (h,t)
+    edges.append(e)
+    
+    if len(t) == len(r):
+        #print e
+        return True
+
+def find_recv(thisnode, eachcom):
+    h = (thisnode.rank, thisnode.index)
+    frm = translate[thisnode.args[-1]].index(thisnode.rank)
+    dest = thisnode.args[0]
+    destg = translate[thisnode.args[-1]][dest]
+    stag = thisnode.args[1]
+
+    for n in eachcom[dest]:
+        if n.call == 'MPI_Recv' and (n.args[0] == frm or n.args[0] == -2) and (n.args[1] == stag or n.args[1] == -1):
+            t = (n.rank, n.index)        
+            e = (h,t)
+            edges.append(e)
+            n.call = None
+            #print e
+            return True
+        
+        elif n.call == 'MPI_Sendrecv' and (n.args[2] == frm or n.args[2] == -2) and (n.args[3] == stag or n.args[3] == -1):
+            t = (n.rank, n.index)        
+            e = (h,t)
+            edges.append(e)
+            n.args[2] = None
+            #print e
+            return True
+
+        elif n.call == 'MPI_Irecv' and (n.args[0] == frm or n.args[0] == -2) and (n.args[1] == stag or n.args[1] == -1):
+            n.call = None
+            req = n.args[2]
+            for w in nodes[destg]:
+                if w.call == 'MPI_Wait' and w.args == req:
+                    t = (w.rank, w.index) 
+                    e = (h,t)
+                    edges.append(e)
+                    w.call = None
+                    #print e
+                    return True
+                elif w.call == 'MPI_Waitall' and (req in w.args):
+                    t = (w.rank,w.index) 
+                    e = (h,t)
+                    edges.append(e)
+                    w.args.remove(req)
+                    #print e
+                    return True   
 
 ############## TRANSLATING RANKS ####################
 agr =  {}
@@ -158,6 +301,12 @@ for key, value in agr.items():
 
 translate['MPI_COMM_WORLD'] = range(reader.GM.total_ranks)
 
+'''
+for key, value in translate.items():
+    print key
+    print value
+    print '\n'
+'''
 ################### SPLITTING THE DATABASE INTO EACH COMMUNICATOR ###################
 
 coms3d = []
@@ -182,141 +331,28 @@ for u in uids:
     
     #print "\n"
 
-#####################  DEFINING FUNCTIONS TO MATCH CALLS #########################
-def match_collectives(thisnode, eachcom):
-    x = (thisnode.rank, thisnode.index)
-    h = t = []
-    h.append(x)
-
-    name = thisnode.call
-    r = range(len(eachcom))
-    r.remove(0)
-    for dest in r:
-        for j in range(ptr[0][dest],len(eachcom[dest])):
-            if eachcom[dest][j].call == name:
-                x = (eachcom[dest][j].rank, eachcom[dest][j].index)
-                h.append(x)
-                ptr[0][dest] = j + 1
-                break
-
-    e = (h,t)
-    edges.append(e)
+    '''
+    for n in range(reader.GM.total_ranks):
+        temp = []
+        for thisnode in nodes[n]:
+            if thisnode.args[-1] == u:
+                temp.append(thisnode)
+        thiscom.insert(n, temp)
+    coms3d.append(thiscom)
     
-    if len(t) == len(r)+1:
-        #print e
-        return True    
-
-def match_redgat(thisnode, eachcom):
-    t = (thisnode.rank, thisnode.index)
-    h = []
-    name = thisnode.call
-    root = thisnode.args[0]
-    r = range(len(eachcom))
-    r.remove(root)
-    for dest in r:
-        for j in range(ptr[root][dest],len(eachcom[dest])):
-            if eachcom[dest][j].call == name and eachcom[dest][j].args[0] == root:
-                x = (eachcom[dest][j].rank, eachcom[dest][j].index)
-                h.append(x)
-                ptr[root][dest] = j + 1
-                break
-
-    e = (h,t)
-    edges.append(e)
+    e =  0
+    print u
+    for f in thiscom:
+        e = e + len(f)
+    print e
+    '''
     
-    if len(h) == len(r):
-        #print e
-        return True
-
-def match_bcast(thisnode, eachcom):
-    h = (thisnode.rank, thisnode.index)
-    t = []
-    root = thisnode.args[0]
-    r = range(len(eachcom))
-    r.remove(root)
-    for dest in r:
-        for j in range(ptr[root][dest],len(eachcom[dest])):
-            if eachcom[dest][j].call == 'MPI_Bcast' and eachcom[dest][j].args[0] == root:
-                x = (eachcom[dest][j].rank, eachcom[dest][j].index)
-                t.append(x)
-                ptr[root][dest] = j + 1
-                break
-
-    e = (h,t)
-    edges.append(e)
-    
-    if len(t) == len(r):
-        #print e
-        return True
-
-def find_ptr(thisnode,eachcom):
-    frm = translate[thisnode.args[-1]].index(thisnode.rank)
-    dest = thisnode.args[0]
-
-    for j in range(ptr[frm][dest],len(eachcom[dest])):
-        if eachcom[dest][j].call == 'MPI_Recv' and (eachcom[dest][j].args[0] == frm or eachcom[dest][j].args[0] == -2):
-            ptr[frm][dest] = j
-            find_recv(thisnode, eachcom)
-            return
-
-        elif eachcom[dest][j].call == 'MPI_Sendrecv' and (eachcom[dest][j].args[2] == frm or eachcom[dest][j].args[2] == -2):
-            ptr[frm][dest] = j 
-            find_recv(thisnode, eachcom)
-            return
-
-        elif eachcom[dest][j].call == 'MPI_Irecv' and (eachcom[dest][j].args[0] == frm or eachcom[dest][j].args[0] == -2):
-            ptr[frm][dest] = j
-            find_recv(thisnode, eachcom)
-            return
-
-
-def find_recv(thisnode, eachcom):
-    global z
-    h = (thisnode.rank, thisnode.index)
-    frm = translate[thisnode.args[-1]].index(thisnode.rank)
-    dest = thisnode.args[0]
-    destg = translate[thisnode.args[-1]][dest]
-    stag = thisnode.args[1]
-
-    for j in range(ptr[frm][dest],len(nodes[dest])):
-        if eachcom[dest][j].call == 'MPI_Recv' and (eachcom[dest][j].args[0] == frm or eachcom[dest][j].args[0] == -2) and (eachcom[dest][j].args[1] == stag or eachcom[dest][j].args[1] == -1):
-            t = (eachcom[dest][j].rank, eachcom[dest][j].index)        
-            e = (h,t)
-            edges.append(e)
-            eachcom[dest][j].call = None
-            z = z + 1
-            #print e
-            return True
-        
-        elif eachcom[dest][j].call == 'MPI_Sendrecv' and (eachcom[dest][j].args[2] == frm or eachcom[dest][j].args[2] == -2) and (eachcom[dest][j].args[3] == stag or eachcom[dest][j].args[3] == -1):
-            t = (eachcom[dest][j].rank, eachcom[dest][j].index)        
-            e = (h,t)
-            edges.append(e)
-            eachcom[dest][j].args[2] = None
-            z = z + 1
-            #print e
-            return True
-
-        elif eachcom[dest][j].call == 'MPI_Irecv' and (eachcom[dest][j].args[0] == frm or eachcom[dest][j].args[0] == -2) and (eachcom[dest][j].args[1] == stag or eachcom[dest][j].args[1] == -1):
-                eachcom[dest][j].call = None
-                req = eachcom[dest][j].args[2]
-                for w in nodes[destg]:
-                    if w.call == 'MPI_Wait' and w.args == req:
-                        t = (w.rank, w.index) 
-                        e = (h,t)
-                        edges.append(e)
-                        z = z + 1
-                        w.call = None
-                        #print e
-                        return True
-                    elif w.call == 'MPI_Waitall' and (req in w.args):
-                        t = (w.rank,w.index) 
-                        e = (h,t)
-                        edges.append(e)
-                        z = z + 1
-                        w.args.remove(req)
-                        #print e
-                        return True   
+'''
+l = 0
+for n in nodes:
+    l = l + len(n)
+print l
+'''
 
 #############################  INTERATE EVERY NODE IN THE LIST AND FIND A MATCH ################################
 c = -1
@@ -328,19 +364,21 @@ for eachcom in coms3d:
     #print 'Translation table: ', translate[uids[c]]
     #print len(eachcom)
 
+    #print '\n'
+
     ptr = []
     for x in range(len(eachcom)):
         ptemp = []
         for y in range(len(eachcom)):
             ptemp.append(0)
         ptr.append(ptemp)
-
+    
     a = 0 
     z = 0
     for n in range(len(eachcom)):
+               
         for thisnode in eachcom[n]:
-
-            if thisnode.call == 'MPI_Bcast': 
+            if thisnode.call in ['MPI_Bcast', 'MPI_Ibcast']: 
                 root = thisnode.args[0]
                 if root == n:
                     a = a + 1
@@ -359,14 +397,17 @@ for eachcom in coms3d:
                 if n == 0:
                     a = a + 1
                     if(match_collectives(thisnode,eachcom)):
-                        z = z + 1
-
+                        z = z + 1  
+            
             if thisnode.call in ['MPI_Send','MPI_Ssend','MPI_Isend','MPI_Sendrecv']:
                 a = a + 1
-                find_ptr(thisnode, eachcom)
+                if (find_recv(thisnode, eachcom)):
+                    z = z + 1
                     
-
+        #if a == z:
+            #print a ,'\t', z, '\t Calls from', n, 'successful'
     print a, z
     print '\n'
 
+    
 #print("--- %s seconds ---" % (time.time() - start_time))
